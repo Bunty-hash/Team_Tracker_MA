@@ -102,13 +102,12 @@ const TODAY = iso(new Date());
 
 /* ---------- fictional team + data ---------- */
 const MEMBERS = [
-  { id: 'm1', name: 'Amara Okafor', role: 'Programme lead', tone: ['#FBE3D6', '#8A3A19'] },
-  { id: 'm2', name: 'Linus Berg', role: 'Finance analyst', tone: ['#DDE8F7', '#2A4E7F'] },
-  { id: 'm3', name: 'Priya Nair', role: 'Operations', tone: ['#E1F0E6', '#25613F'] },
-  { id: 'm4', name: 'Mateo Silva', role: 'Partnerships', tone: ['#F1E4F4', '#6B2F7A'] },
-  { id: 'm5', name: 'Hana Sato', role: 'Product analyst', tone: ['#F6EBC9', '#7A5A0E'] },
-  { id: 'm6', name: 'Dev Patel', role: 'Platform engineer', tone: ['#E4E6EA', '#3F4652'] }
+  { id: 'm7', name: 'Alan Loh', role: 'Team member', tone: ['#DCEEF0', '#1F5C66'] },
+  { id: 'm8', name: 'Franco Zaghini', role: 'Team member', tone: ['#F7E0E8', '#8A2E52'] },
+  { id: 'm9', name: 'Bunty Raj', role: 'Team member', tone: ['#E6E9D4', '#4C5A1E'] },
+  { id: 'm10', name: 'Karen Poh', role: 'Team member', tone: ['#F3E3D3', '#7A4A1E'] }
 ];
+const DEFAULT_MEMBERS = MEMBERS.map(m => ({ ...m }));
 const M = Object.fromEntries(MEMBERS.map(m => [m.id, m]));
 const TYPES = ['Project', 'Client work', 'Exhibition', 'Training', 'Review', 'Travel', 'In office', 'Medical leave', 'Vacation', 'Public holiday', 'All hands', 'Special event', 'Internal'];
 const TYPE_CODE = { 'Project': 'PRJ', 'Client work': 'CLT', 'Exhibition': 'EXH', 'Training': 'TRN', 'Review': 'REV', 'Travel': 'TRV', 'In office': 'OFC', 'Medical leave': 'MED', 'Vacation': 'VAC', 'Public holiday': 'PUB', 'All hands': 'ALL', 'Special event': 'SPL', 'Internal': 'INT' };
@@ -136,7 +135,26 @@ function unregisterType(name) {
 try { JSON.parse(localStorage.getItem(TYPES_KEY) || '[]').forEach(t => registerType(t, false)); } catch (e) {}
 const STATUSES = ['In-Process', 'Confirmed', 'Tentative'];
 M.all = { id: 'all', name: 'Whole team', role: 'Everyone', tone: ['#E4E6EA', '#3F4652'] };
-const first = id => (id === 'all' ? 'Team' : M[id].name.split(' ')[0]);
+const first = id => (id === 'all' ? 'Team' : M[id] ? M[id].name.split(' ')[0] : 'Someone');
+
+/* ---------- editable team: add, rename, remove (saved in this browser) ---------- */
+const TONES = [['#FBE3D6', '#8A3A19'], ['#DDE8F7', '#2A4E7F'], ['#E1F0E6', '#25613F'], ['#F1E4F4', '#6B2F7A'], ['#F6EBC9', '#7A5A0E'], ['#E4E6EA', '#3F4652'], ['#DCEEF0', '#1F5C66'], ['#F7E0E8', '#8A2E52'], ['#E6E9D4', '#4C5A1E'], ['#F3E3D3', '#7A4A1E']];
+const MEMBER_KEY = 'team-availability-members-v2';
+function rebuildM() { Object.keys(M).forEach(k => { if (k !== 'all') delete M[k]; }); MEMBERS.forEach(m => { M[m.id] = m; }); }
+function saveMembers() { try { localStorage.setItem(MEMBER_KEY, JSON.stringify(MEMBERS)); } catch (e) {} }
+function addMember(name, role) {
+  const id = 'u' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5);
+  MEMBERS.push({ id, name, role, tone: TONES[MEMBERS.length % TONES.length] });
+  rebuildM(); saveMembers();
+  return id;
+}
+function renameMember(id, name, role) { const m = M[id]; if (m) { m.name = name; m.role = role; saveMembers(); } }
+function removeMember(id) { const i = MEMBERS.findIndex(m => m.id === id); if (i > -1) MEMBERS.splice(i, 1); rebuildM(); saveMembers(); }
+function resetMembers() { MEMBERS.splice(0, MEMBERS.length, ...DEFAULT_MEMBERS.map(m => ({ ...m }))); rebuildM(); saveMembers(); }
+try {
+  const saved = JSON.parse(localStorage.getItem(MEMBER_KEY) || 'null');
+  if (Array.isArray(saved) && saved.length) { MEMBERS.splice(0, MEMBERS.length, ...saved); rebuildM(); }
+} catch (e) {}
 const initials = n => n.split(' ').map(p => p[0]).join('');
 
 function makeSeed() {
@@ -170,7 +188,7 @@ function makeSeed() {
     e('s25', 'In office', 'm1', 0, 2, 'In office', 'Confirmed'),
     e('s26', 'In office', 'm5', 1, 3, 'In office', 'Confirmed'),
     e('s27', 'In office', 'm4', 0, 0, 'In office', 'Confirmed')
-  ];
+  ].filter(x => x.memberId === 'all' || M[x.memberId]);
 }
 
 /* ---------- Singapore public holidays (MOM gazette, 2026 and 2027; substitute Mondays included) ---------- */
@@ -312,6 +330,7 @@ function Badge({ status }) {
 
 function Avatar({ id, size = 28 }) {
   const m = M[id];
+  if (id !== 'all' && !m) return null;
   if (id === 'all') {
     return (
       <span className="inline-flex shrink-0 items-center justify-center rounded-full" title="Whole team"
@@ -455,6 +474,115 @@ function TypeModal({ entries, onClose, onChanged, onToast }) {
                 );
               })}
             </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- team manager: add, rename, remove people ---------- */
+function MemberRow({ m, count, canRemove, onChanged, onRemove }) {
+  const [name, setName] = useState(m.name);
+  const [role, setRole] = useState(m.role || '');
+  const [confirm, setConfirm] = useState(false);
+  const commit = () => {
+    const n = name.trim();
+    if (!n) { setName(m.name); return; }
+    if (n !== m.name || role.trim() !== (m.role || '')) { renameMember(m.id, n, role.trim()); onChanged(); }
+  };
+  const field = 'min-w-0 w-full rounded-lg border border-transparent bg-transparent px-2 py-1.5 text-base hover:border-line focus:border-line sm:text-sm';
+  const enter = e => { if (e.key === 'Enter') e.target.blur(); };
+  return (
+    <li className="rounded-xl border border-line p-2.5">
+      <div className="flex items-center gap-2.5">
+        <Avatar id={m.id} size={34} />
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <input aria-label={`Name of ${m.name}`} className={field + ' font-semibold'} value={name} maxLength={40}
+            onChange={e => setName(e.target.value)} onBlur={commit} onKeyDown={enter} />
+          <input aria-label={`Role of ${m.name}`} className={field + ' text-muted sm:text-xs'} value={role} maxLength={40} placeholder="Role (optional)"
+            onChange={e => setRole(e.target.value)} onBlur={commit} onKeyDown={enter} />
+        </div>
+        {!confirm && (
+          <button type="button" disabled={!canRemove} title={canRemove ? 'Remove from team' : 'Keep at least one person'}
+            onClick={() => setConfirm(true)} className="shrink-0 rounded-lg px-2.5 py-2 text-xs font-semibold text-muted hover:bg-dim disabled:opacity-40">Remove</button>
+        )}
+      </div>
+      {confirm && (
+        <div className="mt-2.5 flex flex-wrap items-center gap-2 rounded-lg p-2.5 text-sm" style={{ background: 'var(--bad-soft)', border: '1px solid var(--bad-line)' }}>
+          <span className="min-w-0 flex-1">Remove {m.name}{count ? ` and ${count} calendar ${count === 1 ? 'item' : 'items'}` : ''}?</span>
+          <button type="button" onClick={() => onRemove(m.id)} className="rounded-lg bg-bad px-3 py-2 text-xs font-semibold text-white">Yes, remove</button>
+          <button type="button" onClick={() => setConfirm(false)} className="rounded-lg px-3 py-2 text-xs font-semibold text-muted hover:bg-surface">Keep</button>
+        </div>
+      )}
+    </li>
+  );
+}
+
+function TeamModal({ entries, onClose, onChanged, onToast, onRemove, onRestore }) {
+  const [name, setName] = useState('');
+  const [role, setRole] = useState('');
+  const [err, setErr] = useState('');
+  const [restore, setRestore] = useState(false);
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, []);
+  const add = () => {
+    const n = name.trim();
+    if (!n) return setErr('Type a name to add.');
+    if (MEMBERS.some(m => m.name.toLowerCase() === n.toLowerCase())) return setErr('Someone with that name is already on the team.');
+    addMember(n, role.trim());
+    setName(''); setRole(''); setErr('');
+    onChanged(); onToast('Added ' + n);
+  };
+  const label = 'mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted';
+  const field = 'w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-base text-ink sm:text-sm';
+  const enter = e => { if (e.key === 'Enter') { e.preventDefault(); add(); } };
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 sm:items-center sm:p-6" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div role="dialog" aria-labelledby="team-title" className="fade-in max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-surface p-5 shadow-2xl sm:max-w-lg sm:rounded-3xl sm:p-7"
+        style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom, 0px))' }}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="team-title" className="font-display text-xl font-bold">Team</h2>
+            <p className="mt-1 text-sm text-muted">Add, rename or remove people. Removing someone also removes their calendar items.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full p-2 text-muted hover:bg-dim" aria-label="Close"><Icon n="x" /></button>
+        </div>
+
+        <div className="mt-5 grid gap-3 rounded-2xl p-3.5" style={{ background: 'var(--surface-dim)', border: '1px solid var(--line)' }}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label htmlFor="tm-name" className={label}>Name</label>
+              <input id="tm-name" className={field} value={name} maxLength={40} placeholder="e.g. Jamie Tan" onChange={e => { setName(e.target.value); setErr(''); }} onKeyDown={enter} />
+            </div>
+            <div>
+              <label htmlFor="tm-role" className={label}>Role (optional)</label>
+              <input id="tm-role" className={field} value={role} maxLength={40} placeholder="e.g. Sales" onChange={e => setRole(e.target.value)} onKeyDown={enter} />
+            </div>
+          </div>
+          {err && <p role="alert" className="text-sm font-medium text-bad">{err}</p>}
+          <div><button type="button" onClick={add} className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-white hover:brightness-95"><Icon n="plus" />Add person</button></div>
+        </div>
+
+        <h3 className="mb-2 mt-6 text-xs font-semibold uppercase tracking-wider text-muted">People ({MEMBERS.length})</h3>
+        <ul className="grid gap-2">
+          {MEMBERS.map(m => (
+            <MemberRow key={m.id} m={m} count={entries.filter(e => e.memberId === m.id).length} canRemove={MEMBERS.length > 1} onChanged={onChanged} onRemove={onRemove} />
+          ))}
+        </ul>
+
+        <div className="mt-6 border-t border-line pt-4 text-sm">
+          {restore ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="min-w-0 flex-1 text-muted">Replace the team with the sample team? Items for anyone not in it are removed.</span>
+              <button type="button" onClick={() => { onRestore(); setRestore(false); }} className="rounded-lg bg-ink px-3 py-2 text-xs font-semibold text-white">Yes, restore</button>
+              <button type="button" onClick={() => setRestore(false)} className="rounded-lg px-3 py-2 text-xs font-semibold text-muted hover:bg-dim">Cancel</button>
+            </div>
+          ) : (
+            <button type="button" onClick={() => setRestore(true)} className="text-xs font-semibold text-muted underline underline-offset-2">Restore sample team</button>
           )}
         </div>
       </div>
@@ -778,7 +906,7 @@ function EntryDetail({ entry, conflicts, onStatus, onEdit, onDelete }) {
 /* ---------- app ---------- */
 function App() {
   const [entries, setEntries] = useState(() => {
-    try { const raw = localStorage.getItem('team-availability-v3'); if (raw) return JSON.parse(raw); } catch (e) {}
+    try { const raw = localStorage.getItem('team-availability-v3'); if (raw) return JSON.parse(raw).filter(e => e.memberId === 'all' || M[e.memberId]); } catch (e) {}
     return makeSeed();
   });
   const [view, setView] = useState('calendar');
@@ -791,6 +919,7 @@ function App() {
   const [form, setForm] = useState(null);
   const [toast, setToast] = useState('');
   const [typeModal, setTypeModal] = useState(false);
+  const [teamModal, setTeamModal] = useState(false);
   const [calModal, setCalModal] = useState(false);
   const [, setTypeVer] = useState(0);
   const bumpTypes = () => setTypeVer(v => v + 1);
@@ -880,6 +1009,20 @@ function App() {
     }
     setSelId(f.id); setSelDate(f.start); setMonth(f.start.slice(0, 8) + '01'); setWinStart(mondayOf(f.start));
     setForm(null);
+  }
+  function removePerson(id) {
+    const name = M[id] ? M[id].name : 'Person';
+    removeMember(id);
+    setEntries(es => es.filter(e => e.memberId !== id));
+    setFilter(f => (f === 'm:' + id ? 'all' : f));
+    setSelId(null); setForm(null);
+    setToast('Removed ' + name);
+  }
+  function restoreTeam() {
+    resetMembers();
+    setEntries(es => es.filter(e => e.memberId === 'all' || M[e.memberId]));
+    setFilter('all'); setSelId(null);
+    setToast('Sample team restored');
   }
   function importEvents(list, memberId, type, status) {
     const existing = new Set(entries.map(e => [e.memberId, e.title, e.start, e.end].join('|')));
@@ -1164,11 +1307,12 @@ function App() {
     <div className="mx-auto max-w-[1240px] pb-16 sm:pb-0">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-accent-ink">Meridian Studio · sample team</p>
+          <p className="text-xs font-semibold uppercase tracking-wider text-accent-ink">Workload, leave and availability</p>
           <h1 className="mt-1 font-display text-3xl font-bold leading-tight sm:text-4xl">Team availability</h1>
           <p className="mt-1.5 max-w-xl text-muted">Plan work, see who is free, and catch double-bookings before they happen.</p>
         </div>
         <div className="flex gap-2">
+        <button onClick={() => setTeamModal(true)} className="inline-flex items-center gap-2 rounded-2xl border border-line bg-surface px-4 py-3 text-sm font-semibold hover:bg-dim"><Icon n="users" />Team</button>
         <button onClick={() => setCalModal(true)} className="inline-flex items-center gap-2 rounded-2xl border border-line bg-surface px-4 py-3 text-sm font-semibold hover:bg-dim"><Icon n="cal" />Calendars</button>
         <button onClick={() => openAdd(selDate)} className="hidden items-center gap-2 rounded-2xl bg-accent px-5 py-3 text-sm font-bold text-white shadow-sm hover:brightness-95 sm:inline-flex">
           <Icon n="plus" />Add work <kbd className="ml-1 hidden rounded border border-white/40 px-1.5 text-[11px] font-semibold sm:inline">N</kbd>
@@ -1262,7 +1406,7 @@ function App() {
       </main>
 
       <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4 text-xs text-muted">
-        <span>All names and work items are fictional. Changes stay in this browser.</span>
+        <span>Your team and changes stay in this browser.</span>
         <span className="flex gap-3">
           <button onClick={() => { setEntries(makeSeed()); setSelId(null); setToast('Sample data restored'); }} className="font-semibold underline underline-offset-2">Restore sample data</button>
           <button onClick={() => { setEntries([]); setSelId(null); setToast('Calendar cleared'); }} className="font-semibold underline underline-offset-2">Clear all</button>
@@ -1272,7 +1416,8 @@ function App() {
       {form && <EntryForm initial={form} entries={entries} onSave={saveEntry} onClose={() => setForm(null)} onTypesChanged={bumpTypes} />}
       {typeModal && <TypeModal entries={entries} onClose={() => setTypeModal(false)} onChanged={bumpTypes} onToast={setToast} />}
       {calModal && <CalendarsModal entries={entries} onImport={importEvents} onClose={() => setCalModal(false)} />}
-      {!form && !typeModal && !calModal && (
+      {teamModal && <TeamModal entries={entries} onClose={() => setTeamModal(false)} onChanged={bumpTypes} onToast={setToast} onRemove={removePerson} onRestore={restoreTeam} />}
+      {!form && !typeModal && !calModal && !teamModal && (
         <button onClick={() => openAdd(selDate)} aria-label="Add work"
           className="fixed z-40 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-white shadow-lg sm:hidden"
           style={{ bottom: 'max(20px, env(safe-area-inset-bottom, 0px))', right: 'max(16px, env(safe-area-inset-right, 0px))' }}>

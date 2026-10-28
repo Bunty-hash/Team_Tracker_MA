@@ -2,7 +2,7 @@
 
 A single-page prototype for seeing who is free, who is booked and where schedules clash, without a spreadsheet. Built with React and Tailwind, mobile friendly, no login and no backend.
 
-All names and work items are fictional sample data.
+Sample work items are fictional. The team starts with four people and you manage it yourself in the app.
 
 ## Run it
 
@@ -15,6 +15,7 @@ Open `index.html` in a browser. It loads React, Tailwind and fonts from public C
 - **Automatic conflict detection.** The same person on overlapping dates is flagged in the form as you type, on the calendar and in the Conflicts tab.
 - **Work types.** Project, Client work, Exhibition, Training, Review, Travel, In office, Medical leave, Vacation, Public holiday, All hands, Special event and Internal. Add your own with **New type**.
 - **Singapore public holidays.** 2026 and 2027 from the MOM calendar, including substitute Mondays. They mark the whole team as unavailable.
+- **Manage the team.** The **Team** button adds, renames and removes people. Removing someone also removes their calendar items. The team and all changes are saved in your browser.
 - **Filters.** Filter by person, status, category (work, leave, in office, team-wide) or conflicts only, and by work type.
 - **Calendar links.** Each item has Add to Google Calendar, Outlook and Microsoft 365 links. You can also import an `.ics` file exported from Google Calendar or Outlook, and copy the whole calendar as `.ics` text.
 
