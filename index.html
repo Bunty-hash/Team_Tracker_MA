@@ -1,0 +1,1305 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>html{color-scheme:light}body{margin:0}[hidden]{display:none!important}</style>
+<title>Team Availability Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,500;12..96,700&family=Figtree:wght@400;500;600;700&display=swap">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          bg: 'var(--bg)', surface: 'var(--surface)', dim: 'var(--surface-dim)', line: 'var(--line)',
+          ink: 'var(--ink)', muted: 'var(--muted)', accent: 'var(--accent)',
+          'accent-soft': 'var(--accent-soft)', 'accent-ink': 'var(--accent-ink)',
+          bad: 'var(--bad)', 'bad-soft': 'var(--bad-soft)'
+        },
+        fontFamily: {
+          display: ['"Bricolage Grotesque"', 'system-ui', 'sans-serif'],
+          sans: ['Figtree', 'system-ui', 'sans-serif']
+        }
+      }
+    }
+  }
+</script>
+<style>
+  /* Layout: calendar-first. Summary cards on top, month calendar left, day details panel right. One warm accent; status colours are separate. */
+  :root {
+    --bg: #F6F6F3;
+    --surface: #FFFFFF;
+    --surface-dim: #FAFAF8;
+    --hover: #FDF6F2;
+    --line: #E7E5E0;
+    --ink: #22201D;
+    --muted: #6E6A63;
+    --accent: #E2582B;
+    --accent-soft: #FDEDE6;
+    --accent-ink: #A8401B;
+    --bad: #CF3A30;
+    --bad-soft: #FDEBE9;
+    --bad-line: #F4C2BD;
+    --s-proc: #4B78D6;  --s-proc-bg: #E8EFFC; --s-proc-fg: #254A94;
+    --s-conf: #2F9E63;  --s-conf-bg: #E4F4EA; --s-conf-fg: #1B6640;
+    --s-tent-bg: #F3F2EF; --s-tent-fg: #58544D; --s-tent-line: #B9B4AA;
+    --hol: #7B5EA7; --hol-bg: #F1ECF8; --hol-fg: #4F3A78; --hol-line: #D9CEEB;
+    color-scheme: light;
+  }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: Figtree, system-ui, sans-serif;
+    font-size: 14px;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 24px 40px;
+  }
+  .num { font-variant-numeric: tabular-nums; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  button { cursor: pointer; }
+  .cell { background: var(--surface); }
+  .cell.dim { background: var(--surface-dim); }
+  .cell.hol { background: var(--hol-bg); }
+  .cell:hover { background: var(--hover); }
+  .chip:hover { filter: brightness(0.97); }
+  .toast { bottom: calc(env(safe-area-inset-bottom, 0px) + 84px); max-width: calc(100vw - 32px); }
+  @media (min-width: 640px) { .toast { bottom: calc(env(safe-area-inset-bottom, 0px) + 20px); } }
+  .scroll-row { scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+  .scroll-row::-webkit-scrollbar { display: none; }
+  .hatch { background-image: repeating-linear-gradient(45deg, var(--bad-soft), var(--bad-soft) 4px, #F6CBC6 4px, #F6CBC6 8px); }
+  @media (prefers-reduced-motion: no-preference) {
+    .fade-in { animation: fade .18s ease-out; }
+    @keyframes fade { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+  }
+</style>
+
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+<script type="text/babel" data-presets="react">
+const { useState, useMemo, useEffect, useRef } = React;
+
+/* ---------- date helpers (ISO strings, local time) ---------- */
+const iso = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const parse = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+const addDays = (s, n) => { const d = parse(s); d.setDate(d.getDate() + n); return iso(d); };
+const diffDays = (a, b) => Math.round((parse(b) - parse(a)) / 864e5);
+const mondayOf = s => addDays(s, -((parse(s).getDay() + 6) % 7));
+const dShort = s => parse(s).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
+const dLong = s => parse(s).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+const rangeLabel = (a, b) => (a === b ? dShort(a) : `${dShort(a)} – ${dShort(b)}`);
+const spanDays = (a, b) => diffDays(a, b) + 1;
+const monthTitle = s => parse(s).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+const TODAY = iso(new Date());
+
+/* ---------- fictional team + data ---------- */
+const MEMBERS = [
+  { id: 'm1', name: 'Amara Okafor', role: 'Programme lead', tone: ['#FBE3D6', '#8A3A19'] },
+  { id: 'm2', name: 'Linus Berg', role: 'Finance analyst', tone: ['#DDE8F7', '#2A4E7F'] },
+  { id: 'm3', name: 'Priya Nair', role: 'Operations', tone: ['#E1F0E6', '#25613F'] },
+  { id: 'm4', name: 'Mateo Silva', role: 'Partnerships', tone: ['#F1E4F4', '#6B2F7A'] },
+  { id: 'm5', name: 'Hana Sato', role: 'Product analyst', tone: ['#F6EBC9', '#7A5A0E'] },
+  { id: 'm6', name: 'Dev Patel', role: 'Platform engineer', tone: ['#E4E6EA', '#3F4652'] }
+];
+const M = Object.fromEntries(MEMBERS.map(m => [m.id, m]));
+const TYPES = ['Project', 'Client work', 'Exhibition', 'Training', 'Review', 'Travel', 'In office', 'Medical leave', 'Vacation', 'Public holiday', 'All hands', 'Special event', 'Internal'];
+const TYPE_CODE = { 'Project': 'PRJ', 'Client work': 'CLT', 'Exhibition': 'EXH', 'Training': 'TRN', 'Review': 'REV', 'Travel': 'TRV', 'In office': 'OFC', 'Medical leave': 'MED', 'Vacation': 'VAC', 'Public holiday': 'PUB', 'All hands': 'ALL', 'Special event': 'SPL', 'Internal': 'INT' };
+const TEAM_TYPES = ['Public holiday', 'All hands', 'Special event'];
+const TYPE_CAT = { 'In office': 'presence', 'Medical leave': 'leave', 'Vacation': 'leave', 'Public holiday': 'team', 'All hands': 'team', 'Special event': 'team' };
+const CAT_LABEL = { work: 'Work', leave: 'Leave', presence: 'Presence', team: 'Team-wide' };
+const catOf = t => TYPE_CAT[t] || 'work';
+const CUSTOM_TYPES = [];
+const TYPES_KEY = 'team-availability-types-v1';
+function saveCustomTypes() { try { localStorage.setItem(TYPES_KEY, JSON.stringify(CUSTOM_TYPES)); } catch (e) {} }
+function registerType(t, persist = true) {
+  if (TYPES.includes(t.name)) return;
+  TYPES.push(t.name); TYPE_CODE[t.name] = t.code; TYPE_CAT[t.name] = t.cat;
+  if (t.cat === 'team') TEAM_TYPES.push(t.name);
+  CUSTOM_TYPES.push(t);
+  if (persist) saveCustomTypes();
+}
+function unregisterType(name) {
+  const i = TYPES.indexOf(name); if (i > -1) TYPES.splice(i, 1);
+  delete TYPE_CODE[name]; delete TYPE_CAT[name];
+  const j = TEAM_TYPES.indexOf(name); if (j > -1) TEAM_TYPES.splice(j, 1);
+  const k = CUSTOM_TYPES.findIndex(t => t.name === name); if (k > -1) CUSTOM_TYPES.splice(k, 1);
+  saveCustomTypes();
+}
+try { JSON.parse(localStorage.getItem(TYPES_KEY) || '[]').forEach(t => registerType(t, false)); } catch (e) {}
+const STATUSES = ['In-Process', 'Confirmed', 'Tentative'];
+M.all = { id: 'all', name: 'Whole team', role: 'Everyone', tone: ['#E4E6EA', '#3F4652'] };
+const first = id => (id === 'all' ? 'Team' : M[id].name.split(' ')[0]);
+const initials = n => n.split(' ').map(p => p[0]).join('');
+
+function makeSeed() {
+  const t = TODAY;
+  const e = (id, title, memberId, a, b, type, status) => ({ id, title, memberId, start: addDays(t, a), end: addDays(t, b), type, status });
+  return [
+    e('s1', 'Harbourview app redesign', 'm1', -2, 4, 'Project', 'In-Process'),
+    e('s2', 'Northwind client workshop', 'm1', 3, 3, 'Client work', 'Confirmed'),
+    e('s3', 'Customer interviews', 'm1', 14, 16, 'Client work', 'Tentative'),
+    e('s4', 'Q4 audit prep', 'm2', 0, 3, 'Review', 'Confirmed'),
+    e('s5', 'Roadmap review', 'm2', 8, 8, 'Review', 'In-Process'),
+    e('s6', 'Annual leave', 'm2', 12, 16, 'Vacation', 'Confirmed'),
+    e('s7', 'Warehouse migration', 'm3', -1, 8, 'Project', 'In-Process'),
+    e('s8', 'New hire onboarding', 'm3', 6, 7, 'Training', 'Tentative'),
+    e('s9', 'Lisbon partner visit', 'm4', 5, 9, 'Travel', 'Confirmed'),
+    e('s10', 'Vendor contract review', 'm4', 1, 2, 'Review', 'Tentative'),
+    e('s11', 'Pricing model update', 'm5', 2, 11, 'Project', 'In-Process'),
+    e('s12', 'Conference talk prep', 'm5', 17, 18, 'Training', 'Tentative'),
+    e('s13', 'Priority support rota', 'm6', -3, 1, 'Client work', 'Confirmed'),
+    e('s14', 'Platform upgrade', 'm6', 1, 4, 'Project', 'Confirmed'),
+    e('s15', 'Brand refresh sprint', 'm6', 9, 15, 'Project', 'In-Process'),
+    e('s16', 'Trade expo booth', 'm4', 10, 12, 'Exhibition', 'Confirmed'),
+    e('s17', 'Console training day', 'm6', 5, 5, 'Training', 'Tentative'),
+    e('s18', 'Safety training', 'm3', 12, 12, 'Training', 'In-Process'),
+    e('s19', 'Light & Sound Expo', 'm1', 20, 22, 'Exhibition', 'Confirmed'),
+    e('s20', 'Expo demo rehearsal', 'm5', 13, 13, 'Exhibition', 'Tentative'),
+    e('s21', 'Medical leave', 'm3', 14, 15, 'Medical leave', 'Confirmed'),
+    e('s22', 'Monthly all hands', 'all', 2, 2, 'All hands', 'Confirmed'),
+    e('s23', 'Year-end team dinner', 'all', 21, 21, 'Special event', 'Tentative'),
+    e('s24', 'Family holiday', 'm1', 25, 29, 'Vacation', 'Confirmed'),
+    e('s25', 'In office', 'm1', 0, 2, 'In office', 'Confirmed'),
+    e('s26', 'In office', 'm5', 1, 3, 'In office', 'Confirmed'),
+    e('s27', 'In office', 'm4', 0, 0, 'In office', 'Confirmed')
+  ];
+}
+
+/* ---------- Singapore public holidays (MOM gazette, 2026 and 2027; substitute Mondays included) ---------- */
+const HOLIDAY_DEFS = [
+  ['2026-01-01', '2026-01-01', "New Year's Day"],
+  ['2026-02-17', '2026-02-18', 'Chinese New Year'],
+  ['2026-03-21', '2026-03-21', 'Hari Raya Puasa'],
+  ['2026-04-03', '2026-04-03', 'Good Friday'],
+  ['2026-05-01', '2026-05-01', 'Labour Day'],
+  ['2026-05-27', '2026-05-27', 'Hari Raya Haji'],
+  ['2026-05-31', '2026-05-31', 'Vesak Day'],
+  ['2026-06-01', '2026-06-01', 'Vesak Day (observed)'],
+  ['2026-08-09', '2026-08-09', 'National Day'],
+  ['2026-08-10', '2026-08-10', 'National Day (observed)'],
+  ['2026-11-08', '2026-11-08', 'Deepavali'],
+  ['2026-11-09', '2026-11-09', 'Deepavali (observed)'],
+  ['2026-12-25', '2026-12-25', 'Christmas Day'],
+  ['2027-01-01', '2027-01-01', "New Year's Day"],
+  ['2027-02-06', '2027-02-07', 'Chinese New Year'],
+  ['2027-02-08', '2027-02-08', 'Chinese New Year (observed)'],
+  ['2027-03-10', '2027-03-10', 'Hari Raya Puasa'],
+  ['2027-03-26', '2027-03-26', 'Good Friday'],
+  ['2027-05-01', '2027-05-01', 'Labour Day'],
+  ['2027-05-17', '2027-05-17', 'Hari Raya Haji'],
+  ['2027-05-20', '2027-05-20', 'Vesak Day'],
+  ['2027-08-09', '2027-08-09', 'National Day'],
+  ['2027-10-28', '2027-10-28', 'Deepavali'],
+  ['2027-12-25', '2027-12-25', 'Christmas Day']
+];
+const HOLIDAY_ENTRIES = HOLIDAY_DEFS.map(([a, b, name], i) => ({
+  id: 'h' + i, title: name, memberId: 'all', start: a, end: b, type: 'Public holiday', status: 'Official', readonly: true
+}));
+const HOL_BY_DATE = {};
+HOLIDAY_ENTRIES.forEach(h => { for (let d = h.start; d <= h.end; d = addDays(d, 1)) HOL_BY_DATE[d] = h; });
+const holidaysIn = (a, b) => HOLIDAY_ENTRIES.filter(h => h.start <= b && a <= h.end);
+
+/* ---------- conflict detection: same person, overlapping dates ---------- */
+function findConflicts(entries) {
+  const byPerson = {};
+  entries.forEach(e => { if (e.memberId !== 'all' && catOf(e.type) !== 'presence') (byPerson[e.memberId] = byPerson[e.memberId] || []).push(e); });
+  const out = [];
+  Object.values(byPerson).forEach(list => {
+    for (let i = 0; i < list.length; i++) {
+      for (let j = i + 1; j < list.length; j++) {
+        const a = list[i], b = list[j];
+        if (a.start <= b.end && b.start <= a.end) {
+          out.push({
+            key: a.id + '|' + b.id, memberId: a.memberId, a, b,
+            from: a.start > b.start ? a.start : b.start,
+            to: a.end < b.end ? a.end : b.end
+          });
+        }
+      }
+    }
+  });
+  return out.sort((x, y) => (x.from < y.from ? -1 : 1));
+}
+const onDate = (list, date) =>
+  list.filter(e => e.start <= date && date <= e.end).sort((a, b) => {
+    const ka = (a.type === 'Public holiday' ? '0' : '1') + a.start + a.title, kb = (b.type === 'Public holiday' ? '0' : '1') + b.start + b.title;
+    return ka < kb ? -1 : 1;
+  });
+
+/* ---------- calendar links: Google, Outlook, .ics ---------- */
+const d8 = s => s.replace(/-/g, '');
+const enc = encodeURIComponent;
+const evTitle = e => (e.memberId === 'all' ? e.title : `${first(e.memberId)}: ${e.title}`);
+const gcalUrl = e => `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${enc(evTitle(e))}&dates=${d8(e.start)}/${d8(addDays(e.end, 1))}&details=${enc(`${e.type} · ${e.status}`)}`;
+const outlookUrl = (e, host) => `https://${host}/calendar/0/deeplink/compose?path=${enc('/calendar/action/compose')}&rru=addevent&subject=${enc(evTitle(e))}&startdt=${e.start}&enddt=${addDays(e.end, 1)}&allday=true&body=${enc(`${e.type} · ${e.status}`)}`;
+const icsEsc = s => String(s).replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+function buildIcs(list) {
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+  const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Team Availability Tracker//EN'];
+  list.forEach(e => lines.push('BEGIN:VEVENT', `UID:${e.id}@team-availability`, `DTSTAMP:${stamp}`,
+    `DTSTART;VALUE=DATE:${d8(e.start)}`, `DTEND;VALUE=DATE:${d8(addDays(e.end, 1))}`,
+    `SUMMARY:${icsEsc(evTitle(e))}`, `DESCRIPTION:${icsEsc(`${e.type} · ${e.status}`)}`,
+    `STATUS:${e.status === 'Tentative' ? 'TENTATIVE' : 'CONFIRMED'}`, 'END:VEVENT'));
+  lines.push('END:VCALENDAR');
+  return lines.join('\r\n');
+}
+function parseIcs(text) {
+  const body = text.replace(/\r?\n[ \t]/g, '');
+  const toIso = v => {
+    const m = v.match(/^(\d{4})(\d{2})(\d{2})(?:T(\d{2})(\d{2})(\d{2})(Z)?)?/);
+    if (!m) return '';
+    if (m[7]) return iso(new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6])));
+    return `${m[1]}-${m[2]}-${m[3]}`;
+  };
+  return body.split('BEGIN:VEVENT').slice(1).map(b => {
+    const part = b.split('END:VEVENT')[0];
+    const get = k => { const m = part.match(new RegExp('^' + k + '[^:\\r\\n]*:(.*)$', 'mi')); return m ? m[1].trim() : ''; };
+    const ds = get('DTSTART'), de = get('DTEND');
+    if (!ds) return null;
+    const allDay = !/T/.test(ds);
+    const s = toIso(ds);
+    let e = de ? toIso(de) : s;
+    if (allDay && de) e = addDays(e, -1);
+    if (!s || !e) return null;
+    if (e < s) e = s;
+    const title = get('SUMMARY').replace(/\\,/g, ',').replace(/\\;/g, ';').replace(/\\n/gi, ' ') || 'Imported event';
+    return { title: title.slice(0, 80), start: s, end: e };
+  }).filter(Boolean);
+}
+
+/* ---------- small UI pieces ---------- */
+const ICONS = {
+  chevL: 'M15 18l-6-6 6-6', chevR: 'M9 18l6-6-6-6', plus: 'M12 5v14M5 12h14',
+  alert: 'M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
+  x: 'M18 6L6 18M6 6l12 12', pencil: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z',
+  trash: 'M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6', check: 'M20 6L9 17l-5-5',
+  cal: 'M3 5h18v16H3zM3 10h18M8 3v4M16 3v4',
+  users: 'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM23 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8'
+};
+function Icon({ n, className = 'h-4 w-4' }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d={ICONS[n]} />
+    </svg>
+  );
+}
+
+const STATUS = {
+  'In-Process': { dot: 'var(--s-proc)', bg: 'var(--s-proc-bg)', fg: 'var(--s-proc-fg)', line: 'transparent', dash: 'solid' },
+  'Confirmed': { dot: 'var(--s-conf)', bg: 'var(--s-conf-bg)', fg: 'var(--s-conf-fg)', line: 'transparent', dash: 'solid' },
+  'Tentative': { dot: 'var(--s-tent-line)', bg: 'var(--s-tent-bg)', fg: 'var(--s-tent-fg)', line: 'var(--s-tent-line)', dash: 'dashed' },
+  'Official': { dot: 'var(--hol)', bg: 'var(--hol-bg)', fg: 'var(--hol-fg)', line: 'var(--hol-line)', dash: 'solid' }
+};
+
+function Badge({ status }) {
+  const s = STATUS[status];
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-semibold"
+      style={{ background: s.bg, color: s.fg, border: `1px ${s.dash} ${s.line}` }}>
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: s.dot }} />
+      {status === 'Official' ? 'Day off' : status}
+    </span>
+  );
+}
+
+function Avatar({ id, size = 28 }) {
+  const m = M[id];
+  if (id === 'all') {
+    return (
+      <span className="inline-flex shrink-0 items-center justify-center rounded-full" title="Whole team"
+        style={{ width: size, height: size, background: 'var(--ink)', color: '#fff' }}>
+        <Icon n="users" className="h-3.5 w-3.5" />
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex shrink-0 items-center justify-center rounded-full text-[11px] font-bold"
+      style={{ width: size, height: size, background: m.tone[0], color: m.tone[1] }} title={m.name}>
+      {initials(m.name)}
+    </span>
+  );
+}
+
+function TypeTag({ type, compact }) {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-0.5 text-xs font-semibold text-ink"
+      style={{ background: 'var(--surface-dim)', border: '1px solid var(--line)' }}>
+      <span className="text-[10px] font-bold tracking-wider text-muted">{TYPE_CODE[type]}</span>
+      {!compact && type}
+    </span>
+  );
+}
+
+function ConflictTag({ children }) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-bad-soft px-2 py-0.5 text-xs font-semibold text-bad" style={{ border: '1px solid var(--bad-line)' }}>
+      <Icon n="alert" className="h-3 w-3" />{children}
+    </span>
+  );
+}
+
+function ViewNote({ children }) {
+  return <p className="text-sm text-muted">{children}</p>;
+}
+
+function Illustration() {
+  return (
+    <svg viewBox="0 0 120 80" className="h-20 w-[120px]" aria-hidden="true">
+      <circle cx="60" cy="42" r="24" fill="var(--accent-soft)" />
+      <circle cx="60" cy="42" r="13" fill="var(--accent)" />
+      <path d="M8 62h104" stroke="var(--line)" strokeWidth="3" strokeLinecap="round" />
+      <path d="M24 70h72" stroke="var(--line)" strokeWidth="3" strokeLinecap="round" />
+      <path d="M22 26l-5-5M98 26l5-5M60 8V2" stroke="var(--accent)" strokeWidth="3" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/* ---------- add a custom work type ---------- */
+function NewTypeFields({ onAdd, onCancel }) {
+  const [name, setName] = useState('');
+  const [cat, setCat] = useState('work');
+  const [code, setCode] = useState('');
+  const [touched, setTouched] = useState(false);
+  const [err, setErr] = useState('');
+  const auto = n => n.replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
+  const shown = touched ? code : auto(name);
+  const submit = () => {
+    const n = name.trim();
+    const c = shown.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+    if (!n) return setErr('Give the type a name.');
+    if (TYPES.some(t => t.toLowerCase() === n.toLowerCase())) return setErr('That type already exists.');
+    if (!c) return setErr('Add a short code of up to 4 letters.');
+    if (Object.values(TYPE_CODE).includes(c)) return setErr('That code is taken. Try another.');
+    onAdd({ name: n, code: c, cat });
+    setName(''); setCode(''); setTouched(false); setErr(''); setCat('work');
+  };
+  const label = 'mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted';
+  const field = 'w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-base text-ink sm:text-sm';
+  return (
+    <div className="grid gap-3">
+      <div>
+        <label htmlFor="nt-name" className={label}>Type name</label>
+        <input id="nt-name" className={field} value={name} placeholder="e.g. Site inspection" maxLength={28}
+          onChange={e => { setName(e.target.value); setErr(''); }}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); submit(); } }} />
+      </div>
+      <div className="grid grid-cols-[1fr_96px] gap-3">
+        <div>
+          <label htmlFor="nt-cat" className={label}>Counts as</label>
+          <select id="nt-cat" className={field} value={cat} onChange={e => setCat(e.target.value)}>
+            <option value="work">Work (one person)</option>
+            <option value="leave">Leave (one person)</option>
+            <option value="presence">Presence (does not block)</option>
+            <option value="team">Team-wide event</option>
+          </select>
+        </div>
+        <div>
+          <label htmlFor="nt-code" className={label}>Code</label>
+          <input id="nt-code" className={field + ' uppercase'} value={shown} maxLength={4}
+            onChange={e => { setTouched(true); setCode(e.target.value); setErr(''); }} />
+        </div>
+      </div>
+      {err && <p role="alert" className="text-sm font-medium text-bad">{err}</p>}
+      <div className="flex gap-2">
+        <button type="button" onClick={submit} className="rounded-xl bg-ink px-4 py-2.5 text-sm font-bold text-white">Add type</button>
+        {onCancel && <button type="button" onClick={onCancel} className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold hover:bg-dim">Cancel</button>}
+      </div>
+    </div>
+  );
+}
+
+function TypeModal({ entries, onClose, onChanged, onToast }) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, []);
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 sm:items-center sm:p-6" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div role="dialog" aria-labelledby="type-title" className="fade-in max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-surface p-5 shadow-2xl sm:max-w-md sm:rounded-3xl sm:p-7"
+        style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom, 0px))' }}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="type-title" className="font-display text-xl font-bold">Work types</h2>
+            <p className="mt-1 text-sm text-muted">Add your own types. They appear in the form, the filters and the calendar.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full p-2 text-muted hover:bg-dim" aria-label="Close"><Icon n="x" /></button>
+        </div>
+        <div className="mt-5">
+          <NewTypeFields onAdd={t => { registerType(t); onChanged(); force(n => n + 1); onToast('Added work type ' + t.name); }} />
+        </div>
+        <div className="mt-6 border-t border-line pt-4">
+          <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">Your custom types ({CUSTOM_TYPES.length})</h3>
+          {CUSTOM_TYPES.length === 0 ? (
+            <p className="text-sm text-muted">None yet. The built-in types are always available.</p>
+          ) : (
+            <ul className="grid gap-1.5">
+              {CUSTOM_TYPES.map(t => {
+                const used = entries.some(e => e.type === t.name);
+                return (
+                  <li key={t.name} className="flex items-center justify-between gap-3 rounded-xl border border-line p-2.5">
+                    <span className="flex min-w-0 items-center gap-2"><TypeTag type={t.name} /><span className="text-xs text-muted">{CAT_LABEL[t.cat]}</span></span>
+                    <button type="button" disabled={used} title={used ? 'In use by calendar items' : 'Remove type'}
+                      onClick={() => { unregisterType(t.name); onChanged(); force(n => n + 1); onToast('Removed ' + t.name); }}
+                      className="rounded-lg px-2.5 py-1.5 text-xs font-semibold text-muted hover:bg-dim disabled:opacity-40">{used ? 'In use' : 'Remove'}</button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- link calendars: import .ics, export to Google / Outlook ---------- */
+function CalendarsModal({ entries, onImport, onClose }) {
+  const [parsed, setParsed] = useState([]);
+  const [fileName, setFileName] = useState('');
+  const [err, setErr] = useState('');
+  const [member, setMember] = useState(MEMBERS[0].id);
+  const [type, setType] = useState('Internal');
+  const [status, setStatus] = useState('Confirmed');
+  const [showIcs, setShowIcs] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const icsText = useMemo(() => buildIcs(entries), [entries]);
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, []);
+  const onFile = ev => {
+    const file = ev.target.files && ev.target.files[0];
+    setParsed([]); setErr('');
+    if (!file) return;
+    setFileName(file.name);
+    const r = new FileReader();
+    r.onload = () => {
+      const list = parseIcs(String(r.result || ''));
+      if (!list.length) setErr('No events found in that file. Export your calendar as .ics and try again.');
+      setParsed(list.slice(0, 300));
+    };
+    r.onerror = () => setErr('That file could not be read.');
+    r.readAsText(file);
+  };
+  const copyAll = () => {
+    const done = () => { setCopied(true); setTimeout(() => setCopied(false), 2000); };
+    try { navigator.clipboard.writeText(icsText).then(done, () => setShowIcs(true)); } catch (e) { setShowIcs(true); }
+  };
+  const label = 'mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted';
+  const field = 'w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-base text-ink sm:text-sm';
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 sm:items-center sm:p-6" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div role="dialog" aria-labelledby="cal-title" className="fade-in max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-surface p-5 shadow-2xl sm:max-w-lg sm:rounded-3xl sm:p-7"
+        style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom, 0px))' }}>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="cal-title" className="font-display text-xl font-bold">Link calendars</h2>
+            <p className="mt-1 text-sm text-muted">Bring events in from Google Calendar or Outlook, or send work out to them.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full p-2 text-muted hover:bg-dim" aria-label="Close"><Icon n="x" /></button>
+        </div>
+
+        <section className="mt-5 rounded-2xl p-4" style={{ border: '1px solid var(--line)' }}>
+          <h3 className="font-display text-base font-bold">Import from Google Calendar or Outlook</h3>
+          <p className="mt-1 text-sm text-muted">Export your calendar as an .ics file (Google Calendar: Settings, Import and export. Outlook: File, Save calendar), then pick it here.</p>
+          <div className="mt-3 grid gap-3">
+            <div>
+              <label htmlFor="ics-file" className={label}>Calendar file</label>
+              <input id="ics-file" type="file" accept=".ics,text/calendar" onChange={onFile} className={field} />
+            </div>
+            {err && <p role="alert" className="text-sm font-medium text-bad">{err}</p>}
+            {parsed.length > 0 && (
+              <>
+                <p className="text-sm font-semibold" style={{ color: 'var(--s-conf-fg)' }}>Found {parsed.length} {parsed.length === 1 ? 'event' : 'events'} in {fileName}.</p>
+                <ul className="num grid gap-1 text-sm text-muted">
+                  {parsed.slice(0, 4).map((p, i) => <li key={i} className="truncate">{rangeLabel(p.start, p.end)} · {p.title}</li>)}
+                  {parsed.length > 4 && <li>and {parsed.length - 4} more</li>}
+                </ul>
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <div>
+                    <label htmlFor="ics-member" className={label}>Assign to</label>
+                    <select id="ics-member" className={field} value={member} onChange={e => setMember(e.target.value)}>
+                      {MEMBERS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="ics-type" className={label}>Work type</label>
+                    <select id="ics-type" className={field} value={type} onChange={e => setType(e.target.value)}>
+                      {TYPES.filter(t => !TEAM_TYPES.includes(t)).map(t => <option key={t} value={t}>{t}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="ics-status" className={label}>Status</label>
+                    <select id="ics-status" className={field} value={status} onChange={e => setStatus(e.target.value)}>
+                      {STATUSES.map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </div>
+                </div>
+                <button type="button" onClick={() => { onImport(parsed, member, type, status); onClose(); }}
+                  className="rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-white hover:brightness-95">Import {parsed.length} {parsed.length === 1 ? 'event' : 'events'}</button>
+              </>
+            )}
+          </div>
+        </section>
+
+        <section className="mt-4 rounded-2xl p-4" style={{ border: '1px solid var(--line)' }}>
+          <h3 className="font-display text-base font-bold">Send to Google Calendar or Outlook</h3>
+          <p className="mt-1 text-sm text-muted">Open any work item and use its Add to Google Calendar, Outlook or Microsoft 365 links. To move everything at once, copy the calendar text below and import it as an .ics file.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button type="button" onClick={copyAll} className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold hover:bg-dim">{copied ? 'Copied' : `Copy ${entries.length} items as .ics`}</button>
+            <button type="button" onClick={() => setShowIcs(s => !s)} className="rounded-xl px-3 py-2.5 text-sm font-semibold text-muted hover:bg-dim">{showIcs ? 'Hide text' : 'Show text'}</button>
+          </div>
+          {showIcs && <textarea readOnly aria-label="Calendar file text" value={icsText} onFocus={e => e.target.select()} className="num mt-3 h-40 w-full rounded-xl border border-line bg-dim p-3 text-xs" />}
+        </section>
+
+        <p className="mt-4 text-xs text-muted">A live two-way sync needs you to sign in to your Google or Microsoft account. This prototype keeps everything in your browser, so it uses import and export instead.</p>
+      </div>
+    </div>
+  );
+}
+
+/* ---------- add / edit form ---------- */
+function EntryForm({ initial, entries, onSave, onClose, onTypesChanged }) {
+  const [f, setF] = useState(initial);
+  const [err, setErr] = useState('');
+  const titleRef = useRef(null);
+  const editing = !!initial.id;
+  useEffect(() => { titleRef.current && titleRef.current.focus(); }, []);
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  }, []);
+  const set = (k, v) => setF(p => ({ ...p, [k]: v }));
+  const setStart = v => setF(p => ({ ...p, start: v, end: !p.end || p.end < v ? v : p.end }));
+  const [adding, setAdding] = useState(false);
+  const isTeam = TEAM_TYPES.includes(f.type);
+  const setType = t => setF(p => ({ ...p, type: t, memberId: TEAM_TYPES.includes(t) ? 'all' : (p.memberId === 'all' ? MEMBERS[0].id : p.memberId) }));
+  const hols = f.start && f.end && f.end >= f.start && !isTeam ? holidaysIn(f.start, f.end) : [];
+  const clashes = useMemo(() => {
+    if (!f.memberId || f.memberId === 'all' || !f.start || !f.end || f.end < f.start) return [];
+    return entries.filter(e => e.id !== f.id && e.memberId === f.memberId && e.start <= f.end && f.start <= e.end);
+  }, [f, entries]);
+  const submit = ev => {
+    ev.preventDefault();
+    if (!f.title.trim()) { setErr('Add a short title so the team knows what this is.'); titleRef.current && titleRef.current.focus(); return; }
+    if (!f.start || !f.end) { setErr('Pick a start and end date.'); return; }
+    onSave({ ...f, title: f.title.trim() });
+  };
+  const label = 'mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted';
+  const field = 'w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-base text-ink sm:text-sm';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 sm:items-center sm:p-6" onMouseDown={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <form onSubmit={submit} className="fade-in max-h-[92vh] w-full overflow-y-auto rounded-t-3xl bg-surface p-5 shadow-2xl sm:max-w-lg sm:rounded-3xl sm:p-7"
+        style={{ paddingBottom: 'max(20px, env(safe-area-inset-bottom, 0px))' }} aria-labelledby="form-title">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 id="form-title" className="font-display text-xl font-bold">{editing ? 'Edit work' : 'Add work'}</h2>
+            <p className="mt-1 text-sm text-muted">Five quick fields. Conflicts show up as you type.</p>
+          </div>
+          <button type="button" onClick={onClose} className="rounded-full p-2 text-muted hover:bg-dim" aria-label="Close form"><Icon n="x" /></button>
+        </div>
+
+        <div className="mt-5 grid gap-4">
+          <div>
+            <label htmlFor="f-title" className={label}>Title</label>
+            <input id="f-title" ref={titleRef} className={field} value={f.title} placeholder="e.g. Supplier audit"
+              onChange={e => { set('title', e.target.value); setErr(''); }} />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label htmlFor="f-member" className={label}>Team member</label>
+              <select id="f-member" className={field} value={f.memberId} disabled={isTeam} onChange={e => set('memberId', e.target.value)}>
+                {isTeam ? <option value="all">Whole team</option> : MEMBERS.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+            <div>
+              <label htmlFor="f-type" className={label}>Work type</label>
+              <select id="f-type" className={field} value={adding ? '__new' : f.type}
+                onChange={e => { if (e.target.value === '__new') setAdding(true); else { setAdding(false); setType(e.target.value); } }}>
+                {TYPES.filter(t => t !== 'Public holiday').map(t => <option key={t} value={t}>{t}</option>)}
+                <option value="__new">+ Add new type…</option>
+              </select>
+            </div>
+            {adding && (
+              <div className="rounded-2xl p-3.5 sm:col-span-2" style={{ background: 'var(--surface-dim)', border: '1px solid var(--line)' }}>
+                <NewTypeFields onCancel={() => setAdding(false)} onAdd={t => { registerType(t); onTypesChanged(); setType(t.name); setAdding(false); }} />
+              </div>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="f-start" className={label}>Start</label>
+              <input id="f-start" type="date" className={field} value={f.start} onChange={e => setStart(e.target.value)} />
+            </div>
+            <div>
+              <label htmlFor="f-end" className={label}>End</label>
+              <input id="f-end" type="date" className={field} min={f.start} value={f.end} onChange={e => set('end', e.target.value)} />
+            </div>
+          </div>
+          <div>
+            <span id="f-status-l" className={label}>Status</span>
+            <div role="radiogroup" aria-labelledby="f-status-l" className="grid grid-cols-3 gap-2">
+              {STATUSES.map(s => {
+                const on = f.status === s;
+                return (
+                  <button key={s} type="button" role="radio" aria-checked={on} onClick={() => set('status', s)}
+                    className="rounded-xl px-2 py-2.5 text-sm font-semibold transition-colors"
+                    style={{ border: on ? '1px solid var(--accent)' : '1px solid var(--line)', background: on ? 'var(--accent-soft)' : 'var(--surface)', color: on ? 'var(--accent-ink)' : 'var(--ink)' }}>
+                    {s}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {clashes.length > 0 ? (
+            <div role="alert" className="rounded-2xl p-3.5 text-sm" style={{ background: 'var(--bad-soft)', border: '1px solid var(--bad-line)' }}>
+              <p className="flex items-center gap-2 font-semibold text-bad"><Icon n="alert" />{first(f.memberId)} is already booked on these dates</p>
+              <ul className="mt-2 grid gap-1 text-ink">
+                {clashes.map(c => <li key={c.id} className="num">{c.title} <span className="text-muted">· {rangeLabel(c.start, c.end)} · {c.status}</span></li>)}
+              </ul>
+              <p className="mt-2 text-muted">You can still save it. It will be flagged as a conflict.</p>
+            </div>
+          ) : (
+            <p className="flex items-center gap-2 text-sm" style={{ color: 'var(--s-conf-fg)' }}>
+              <Icon n="check" />{isTeam ? 'This applies to the whole team.' : first(f.memberId) + ' is free for these dates.'}
+            </p>
+          )}
+          {hols.length > 0 && (
+            <p className="rounded-xl p-3 text-sm" style={{ background: 'var(--hol-bg)', color: 'var(--hol-fg)', border: '1px solid var(--hol-line)' }}>
+              These dates include a Singapore public holiday: {hols.map(h => `${h.title} (${rangeLabel(h.start, h.end)})`).join(', ')}.
+            </p>
+          )}
+          {err && <p role="alert" className="text-sm font-medium text-bad">{err}</p>}
+        </div>
+
+        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <button type="button" onClick={onClose} className="rounded-xl border border-line px-4 py-2.5 text-sm font-semibold text-ink hover:bg-dim">Cancel</button>
+          <button type="submit" className="rounded-xl bg-accent px-5 py-2.5 text-sm font-bold text-white hover:brightness-95">{editing ? 'Save changes' : 'Add to calendar'}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ---------- selected entry details ---------- */
+function EntryDetail({ entry, conflicts, onStatus, onEdit, onDelete }) {
+  const [confirm, setConfirm] = useState(false);
+  if (entry.readonly) {
+    return (
+      <section className="fade-in rounded-2xl p-4" aria-label="Public holiday details" style={{ background: 'var(--hol-bg)', border: '1px solid var(--hol-line)' }}>
+        <div className="flex items-start justify-between gap-3">
+          <h3 className="font-display text-lg font-bold leading-snug">{entry.title}</h3>
+          <Badge status="Official" />
+        </div>
+        <p className="num mt-2 text-sm font-medium">{rangeLabel(entry.start, entry.end)} <span className="font-normal text-muted">· {spanDays(entry.start, entry.end)} {spanDays(entry.start, entry.end) === 1 ? 'day' : 'days'}</span></p>
+        <p className="mt-1.5 text-sm text-muted">Singapore public holiday from the MOM calendar. The whole team is off, so nobody counts as available.</p>
+      </section>
+    );
+  }
+  return (
+    <section className="fade-in rounded-2xl border border-line bg-surface p-4" aria-label="Selected work details">
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="font-display text-lg font-bold leading-snug">{entry.title}</h3>
+        <Badge status={entry.status} />
+      </div>
+      <dl className="mt-3 grid grid-cols-[84px_1fr] gap-x-3 gap-y-2.5 text-sm">
+        <dt className="text-muted">Assigned to</dt>
+        <dd className="flex items-center gap-2 font-medium"><Avatar id={entry.memberId} size={24} />{M[entry.memberId].name}</dd>
+        <dt className="text-muted">Dates</dt>
+        <dd className="num font-medium">{rangeLabel(entry.start, entry.end)} <span className="font-normal text-muted">· {spanDays(entry.start, entry.end)} {spanDays(entry.start, entry.end) === 1 ? 'day' : 'days'}</span></dd>
+        <dt className="text-muted">Work type</dt>
+        <dd><TypeTag type={entry.type} /></dd>
+      </dl>
+
+      {conflicts.length > 0 && (
+        <div className="mt-3.5 rounded-xl p-3 text-sm" style={{ background: 'var(--bad-soft)', border: '1px solid var(--bad-line)' }}>
+          <p className="flex items-center gap-2 font-semibold text-bad"><Icon n="alert" />Scheduling conflict</p>
+          <ul className="mt-1.5 grid gap-1">
+            {conflicts.map(c => (
+              <li key={c.other.id} className="num">Overlaps <span className="font-semibold">{c.other.title}</span> <span className="text-muted">on {rangeLabel(c.from, c.to)}</span></li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="mt-4">
+        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted">Update status</span>
+        <div className="grid grid-cols-3 gap-1.5" role="group" aria-label="Update status">
+          {STATUSES.map(s => {
+            const on = entry.status === s;
+            return (
+              <button key={s} onClick={() => onStatus(s)} aria-pressed={on} className="rounded-lg px-1 py-2 text-xs font-semibold"
+                style={{ border: on ? '1px solid var(--accent)' : '1px solid var(--line)', background: on ? 'var(--accent-soft)' : 'var(--surface)', color: on ? 'var(--accent-ink)' : 'var(--ink)' }}>
+                {s}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-4 flex gap-2">
+        <button onClick={onEdit} className="inline-flex items-center gap-1.5 rounded-xl border border-line px-3 py-2 text-sm font-semibold hover:bg-dim"><Icon n="pencil" />Edit</button>
+        {confirm ? (
+          <>
+            <button onClick={onDelete} className="rounded-xl bg-bad px-3 py-2 text-sm font-semibold text-white">Yes, delete</button>
+            <button onClick={() => setConfirm(false)} className="rounded-xl px-3 py-2 text-sm font-semibold text-muted hover:bg-dim">Keep</button>
+          </>
+        ) : (
+          <button onClick={() => setConfirm(true)} className="inline-flex items-center gap-1.5 rounded-xl px-3 py-2 text-sm font-semibold text-muted hover:bg-dim"><Icon n="trash" />Delete</button>
+        )}
+      </div>
+
+      <div className="mt-4 border-t border-line pt-3">
+        <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted">Add to your calendar</span>
+        <div className="flex flex-wrap gap-1.5">
+          {[['Google Calendar', gcalUrl(entry)], ['Outlook', outlookUrl(entry, 'outlook.live.com')], ['Microsoft 365', outlookUrl(entry, 'outlook.office.com')]].map(([n, href]) => (
+            <a key={n} href={href} target="_blank" rel="noopener noreferrer" className="rounded-lg border border-line px-2.5 py-1.5 text-xs font-semibold text-ink hover:bg-dim">{n}</a>
+          ))}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/* ---------- app ---------- */
+function App() {
+  const [entries, setEntries] = useState(() => {
+    try { const raw = localStorage.getItem('team-availability-v3'); if (raw) return JSON.parse(raw); } catch (e) {}
+    return makeSeed();
+  });
+  const [view, setView] = useState('calendar');
+  const [month, setMonth] = useState(TODAY.slice(0, 8) + '01');
+  const [winStart, setWinStart] = useState(mondayOf(TODAY));
+  const [selDate, setSelDate] = useState(TODAY);
+  const [selId, setSelId] = useState(null);
+  const [filter, setFilter] = useState('all');
+  const [hiddenTypes, setHiddenTypes] = useState([]);
+  const [form, setForm] = useState(null);
+  const [toast, setToast] = useState('');
+  const [typeModal, setTypeModal] = useState(false);
+  const [calModal, setCalModal] = useState(false);
+  const [, setTypeVer] = useState(0);
+  const bumpTypes = () => setTypeVer(v => v + 1);
+  const [narrow, setNarrow] = useState(() => window.matchMedia('(max-width: 639px)').matches);
+  const panelRef = useRef(null);
+  const firstRun = useRef(true);
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 639px)');
+    const h = () => setNarrow(mq.matches);
+    mq.addEventListener('change', h);
+    return () => mq.removeEventListener('change', h);
+  }, []);
+  useEffect(() => {
+    if (firstRun.current) { firstRun.current = false; return; }
+    if (window.innerWidth < 1024 && panelRef.current) panelRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [selDate, selId]);
+
+  useEffect(() => { try { localStorage.setItem('team-availability-v3', JSON.stringify(entries)); } catch (e) {} }, [entries]);
+  useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(''), 2600); return () => clearTimeout(t); }, [toast]);
+  useEffect(() => {
+    const k = e => {
+      const tag = (e.target.tagName || '').toLowerCase();
+      if (form || ['input', 'select', 'textarea'].includes(tag) || e.metaKey || e.ctrlKey) return;
+      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); openAdd(); }
+    };
+    window.addEventListener('keydown', k);
+    return () => window.removeEventListener('keydown', k);
+  });
+
+  const memberFilter = filter.startsWith('m:') ? filter.slice(2) : 'all';
+  const items = useMemo(() => [...entries, ...HOLIDAY_ENTRIES], [entries]);
+  const toggleType = t => setHiddenTypes(h => (h.includes(t) ? h.filter(x => x !== t) : [...h, t]));
+  const allConflicts = useMemo(() => findConflicts(entries), [entries]);
+  const conflicts = useMemo(() => (memberFilter === 'all' ? allConflicts : allConflicts.filter(c => c.memberId === memberFilter)), [allConflicts, memberFilter]);
+  const confMap = useMemo(() => {
+    const m = {};
+    allConflicts.forEach(c => {
+      (m[c.a.id] = m[c.a.id] || []).push({ other: c.b, from: c.from, to: c.to });
+      (m[c.b.id] = m[c.b.id] || []).push({ other: c.a, from: c.from, to: c.to });
+    });
+    return m;
+  }, [allConflicts]);
+  const confDays = useMemo(() => {
+    const s = new Set();
+    conflicts.forEach(c => { for (let d = c.from; d <= c.to; d = addDays(d, 1)) s.add(d); });
+    return s;
+  }, [conflicts]);
+  const byMember = useMemo(() => {
+    const [k, v] = filter.split(':');
+    return items.filter(e => {
+      const hol = e.type === 'Public holiday';
+      if (filter === 'all') return true;
+      if (k === 'm') return e.memberId === v || e.memberId === 'all';
+      if (k === 's') return !hol && e.status === v;
+      if (k === 'x') return !hol && (confMap[e.id] || []).length > 0;
+      if (k === 'c') return hol ? v !== 'work' : catOf(e.type) === v;
+      return true;
+    });
+  }, [items, filter, confMap]);
+  const visible = useMemo(() => byMember.filter(e => !hiddenTypes.includes(e.type)), [byMember, hiddenTypes]);
+  const typeCounts = Object.fromEntries(TYPES.map(t => [t, byMember.filter(e => e.type === t).length]));
+
+  const selEntry = items.find(e => e.id === selId) || null;
+  const dayEntries = onDate(visible, selDate);
+  const personBusy = (id, d) => !!HOL_BY_DATE[d] || entries.some(e => e.memberId === id && catOf(e.type) !== 'presence' && e.start <= d && d <= e.end);
+  const people = memberFilter === 'all' ? MEMBERS : MEMBERS.filter(m => m.id === memberFilter);
+
+  /* summary figures */
+  const wkStart = mondayOf(TODAY), wkEnd = addDays(wkStart, 6);
+  const thisWeek = entries.filter(e => catOf(e.type) !== 'presence' && e.start <= wkEnd && e.end >= wkStart).length;
+  const freeToday = MEMBERS.filter(m => !personBusy(m.id, TODAY)).length;
+  const tentative = entries.filter(e => e.status === 'Tentative').length;
+
+  function openAdd(date) {
+    const d = typeof date === 'string' ? date : selDate;
+    setForm({ id: null, title: '', memberId: memberFilter !== 'all' ? memberFilter : MEMBERS[0].id, type: 'Project', status: 'Confirmed', start: d, end: d });
+  }
+  function saveEntry(f) {
+    if (f.id) {
+      setEntries(es => es.map(e => (e.id === f.id ? f : e)));
+      setToast('Changes saved');
+    } else {
+      f = { ...f, id: 'e' + Date.now().toString(36) + Math.random().toString(36).slice(2, 5) };
+      setEntries(es => [...es, f]);
+      const clash = f.memberId !== 'all' && catOf(f.type) !== 'presence' && entries.some(e => e.memberId === f.memberId && catOf(e.type) !== 'presence' && e.start <= f.end && f.start <= e.end);
+      setToast(clash ? 'Added. This overlaps another commitment.' : 'Added to the calendar');
+    }
+    setSelId(f.id); setSelDate(f.start); setMonth(f.start.slice(0, 8) + '01'); setWinStart(mondayOf(f.start));
+    setForm(null);
+  }
+  function importEvents(list, memberId, type, status) {
+    const existing = new Set(entries.map(e => [e.memberId, e.title, e.start, e.end].join('|')));
+    const fresh = list
+      .filter(p => !existing.has([memberId, p.title, p.start, p.end].join('|')))
+      .map((p, i) => ({ id: 'i' + Date.now().toString(36) + i, title: p.title, memberId, start: p.start, end: p.end, type, status }));
+    setEntries(es => [...es, ...fresh]);
+    if (fresh.length) { setSelDate(fresh[0].start); setMonth(fresh[0].start.slice(0, 8) + '01'); setWinStart(mondayOf(fresh[0].start)); }
+    setToast(fresh.length ? `Imported ${fresh.length} ${fresh.length === 1 ? 'event' : 'events'}` : 'Nothing new to import');
+  }
+  const pickDate = d => { setSelDate(d); setSelId(null); };
+  const pickEntry = (e, d) => { setSelDate(d); setSelId(e.id); };
+  const shiftMonth = n => { const d = parse(month); d.setMonth(d.getMonth() + n); setMonth(iso(d)); };
+  const goToday = () => { setMonth(TODAY.slice(0, 8) + '01'); setWinStart(mondayOf(TODAY)); setSelDate(TODAY); setSelId(null); };
+
+  const chipStyle = (e, d) => {
+    const s = STATUS[e.status];
+    const hasC = (confMap[e.id] || []).some(c => c.from <= d && d <= c.to);
+    return {
+      background: s.bg, color: s.fg,
+      border: `1px ${s.dash} ${s.line}`,
+      boxShadow: e.id === selId ? '0 0 0 2px var(--accent)' : hasC ? 'inset 0 0 0 1.5px var(--bad)' : 'none'
+    };
+  };
+
+  /* ---- calendar view ---- */
+  const cells = useMemo(() => {
+    const lead = (parse(month).getDay() + 6) % 7;
+    const dim = new Date(parse(month).getFullYear(), parse(month).getMonth() + 1, 0).getDate();
+    const rows = Math.ceil((lead + dim) / 7);
+    return Array.from({ length: rows * 7 }, (_, i) => addDays(month, i - lead));
+  }, [month]);
+
+  const calendar = (
+    <section className="rounded-2xl border border-line bg-surface p-3 sm:p-5" aria-label="Month calendar">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-display text-xl font-bold">{monthTitle(month)}</h2>
+        <div className="flex items-center gap-1.5">
+          <button onClick={goToday} className="rounded-xl border border-line px-3 py-1.5 text-sm font-semibold hover:bg-dim">Today</button>
+          <button onClick={() => shiftMonth(-1)} className="rounded-xl border border-line p-2.5 hover:bg-dim" aria-label="Previous month"><Icon n="chevL" /></button>
+          <button onClick={() => shiftMonth(1)} className="rounded-xl border border-line p-2.5 hover:bg-dim" aria-label="Next month"><Icon n="chevR" /></button>
+        </div>
+      </div>
+      <div className="overflow-hidden rounded-xl border border-line">
+        <div className="grid grid-cols-7 gap-px bg-line">
+          {['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(d => (
+            <div key={d} className="bg-dim py-2 text-center text-xs font-semibold uppercase tracking-wider text-muted">{d}</div>
+          ))}
+          {cells.map(date => {
+            const inMonth = date.slice(0, 7) === month.slice(0, 7);
+            const list = onDate(visible, date);
+            const isToday = date === TODAY, isSel = date === selDate;
+            const dow = (parse(date).getDay() + 6) % 7;
+            return (
+              <div key={date} onClick={() => pickDate(date)}
+                className={'cell ' + (inMonth && dow < 5 ? '' : 'dim') + (HOL_BY_DATE[date] ? ' hol' : '') + ' relative min-h-[64px] cursor-pointer p-1 sm:min-h-[116px] sm:p-1.5'}
+                style={{ boxShadow: isSel ? 'inset 0 0 0 2px var(--accent)' : 'none' }}>
+                <div className="flex items-center justify-between">
+                  <button onClick={e => { e.stopPropagation(); pickDate(date); }}
+                    aria-label={`${dLong(date)}, ${list.length} ${list.length === 1 ? 'item' : 'items'}${confDays.has(date) ? ', conflict' : ''}`}
+                    className="num flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold"
+                    style={{ background: isToday ? 'var(--accent)' : 'transparent', color: isToday ? '#fff' : inMonth ? 'var(--ink)' : 'var(--muted)', opacity: inMonth ? 1 : 0.55 }}>
+                    {parse(date).getDate()}
+                  </button>
+                  {confDays.has(date) && <span className="text-bad" title="Scheduling conflict"><Icon n="alert" className="h-3.5 w-3.5" /></span>}
+                </div>
+                <div className="mt-1 hidden gap-1 sm:grid">
+                  {list.slice(0, 3).map(e => (
+                    <button key={e.id} onClick={ev => { ev.stopPropagation(); pickEntry(e, date); }} title={`${M[e.memberId].name}: ${e.title} (${e.status})`}
+                      className="chip block w-full truncate rounded-md px-1.5 py-0.5 text-left text-[11px] font-semibold leading-4" style={chipStyle(e, date)}>
+                      <span className="mr-1 text-[9px] font-bold tracking-wider opacity-60">{TYPE_CODE[e.type]}</span>{e.type === 'Public holiday' ? e.title : first(e.memberId) + ' · ' + e.title}
+                    </button>
+                  ))}
+                  {list.length > 3 && <span className="px-1 text-[11px] font-semibold text-muted">+{list.length - 3} more</span>}
+                </div>
+                <div className="mt-1 flex flex-wrap gap-0.5 sm:hidden">
+                  {list.slice(0, 6).map(e => (
+                    <span key={e.id} className="h-2 w-2 rounded-full" style={{ background: STATUS[e.status].dot }} />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+      <Legend />
+    </section>
+  );
+
+  /* ---- availability view ---- */
+  const winDays = Array.from({ length: narrow ? 7 : 14 }, (_, i) => addDays(winStart, i));
+  const availability = (
+    <section className="rounded-2xl border border-line bg-surface p-3 sm:p-5" aria-label="Team availability grid">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <h2 className="font-display text-xl font-bold num">{rangeLabel(winDays[0], winDays[winDays.length - 1])}</h2>
+        <div className="flex items-center gap-1.5">
+          <button onClick={goToday} className="rounded-xl border border-line px-3 py-1.5 text-sm font-semibold hover:bg-dim">Today</button>
+          <button onClick={() => setWinStart(addDays(winStart, -7))} className="rounded-xl border border-line p-2.5 hover:bg-dim" aria-label="Previous week"><Icon n="chevL" /></button>
+          <button onClick={() => setWinStart(addDays(winStart, 7))} className="rounded-xl border border-line p-2.5 hover:bg-dim" aria-label="Next week"><Icon n="chevR" /></button>
+        </div>
+      </div>
+      <div className="overflow-x-auto">
+        <div className={'grid gap-y-1 ' + (narrow ? '' : 'min-w-[760px]')} style={{ gridTemplateColumns: `${narrow ? 84 : 132}px repeat(${winDays.length}, minmax(0, 1fr))`, columnGap: narrow ? 2 : 3 }}>
+          <div />
+          {winDays.map(d => {
+            const dow = (parse(d).getDay() + 6) % 7;
+            const isT = d === TODAY, isS = d === selDate;
+            return (
+              <button key={d} onClick={() => pickDate(d)} aria-label={dLong(d)} className="num rounded-lg py-1 text-center"
+                style={{ background: isS ? 'var(--accent-soft)' : 'transparent', color: dow > 4 ? 'var(--muted)' : 'var(--ink)' }}>
+                <span className="block text-[10px] font-semibold uppercase tracking-wider text-muted">{parse(d).toLocaleDateString('en-GB', { weekday: 'short' }).slice(0, 2)}</span>
+                <span className="mx-auto mt-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold"
+                  style={{ background: isT ? 'var(--accent)' : 'transparent', color: isT ? '#fff' : 'inherit' }}>{parse(d).getDate()}</span>
+              </button>
+            );
+          })}
+          {people.map(m => (
+            <React.Fragment key={m.id}>
+              <div className="flex items-center gap-2 pr-2">
+                <Avatar id={m.id} size={26} />
+                <span className="min-w-0"><span className="block truncate text-sm font-semibold">{m.name.split(' ')[0]}</span><span className="hidden truncate text-[11px] text-muted sm:block">{m.role}</span></span>
+              </div>
+              {winDays.map(d => {
+                const list = onDate(entries, d).filter(e => e.memberId === m.id && catOf(e.type) !== 'presence');
+                const hol = HOL_BY_DATE[d];
+                const dow = (parse(d).getDay() + 6) % 7;
+                const base = 'relative h-10 w-full rounded-md ';
+                let style = { background: dow > 4 ? 'var(--surface-dim)' : '#F9F9F7', border: '1px solid var(--line)' };
+                let cls = base;
+                if (list.length === 1) { const s = STATUS[list[0].status]; style = { background: s.bg, border: `1px ${s.dash} ${s.dash === 'dashed' ? s.line : s.dot}` }; }
+                if (list.length > 1) { cls += 'hatch '; style = { border: '1.5px solid var(--bad)' }; }
+                if (!list.length && hol) style = { background: 'var(--hol-bg)', border: '1px solid var(--hol-line)' };
+                return (
+                  <button key={d} className={cls} style={{ ...style, boxShadow: d === selDate ? '0 0 0 2px var(--accent)' : 'none' }}
+                    title={list.length ? `${m.name}: ${list.map(e => `${e.title} (${e.type}, ${e.status})`).join(' + ')}` : hol ? `${hol.title}, public holiday` : `${m.name} is free`}
+                    aria-label={`${m.name}, ${dShort(d)}: ${list.length ? list.map(e => `${e.title}, ${e.type}, ${e.status}`).join(' and ') : hol ? 'public holiday, ' + hol.title : 'free'}`}
+                    onClick={() => { setSelDate(d); setSelId(list.length === 1 ? list[0].id : !list.length && hol ? hol.id : null); }}>
+                    {list.length === 1 && <span className="text-[9px] font-bold tracking-wide" style={{ color: STATUS[list[0].status].fg }}>{TYPE_CODE[list[0].type]}</span>}
+                    {list.length > 1 && <span className="text-[11px] font-bold text-bad">{list.length}×</span>}
+                    {!list.length && hol && <span className="text-[9px] font-bold tracking-wide" style={{ color: 'var(--hol-fg)' }}>PUB</span>}
+                    {list.length > 0 && hol && <span className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full" style={{ background: 'var(--hol)' }} />}
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))}
+          <div className="flex items-center pr-2 pt-2 text-sm font-semibold">People free</div>
+          {winDays.map(d => {
+            const n = people.filter(p => !personBusy(p.id, d)).length;
+            return (
+              <div key={d} className="num pt-2 text-center text-sm font-bold" style={{ color: n === 0 ? 'var(--bad)' : 'var(--ink)' }}>{n}</div>
+            );
+          })}
+        </div>
+      </div>
+      <Legend />
+    </section>
+  );
+
+  /* ---- conflicts view ---- */
+  const conflictView = conflicts.length === 0 ? (
+    <section className="flex flex-col items-center rounded-2xl border border-line bg-surface px-6 py-12 text-center">
+      <Illustration />
+      <h2 className="mt-4 font-display text-xl font-bold">No clashes. Nice.</h2>
+      <p className="mt-1 max-w-sm text-sm text-muted">Nobody is double-booked right now. If someone gets two things on the same day, they will show up here.</p>
+    </section>
+  ) : (
+    <section className="grid gap-3" aria-label="Scheduling conflicts">
+      {conflicts.map(c => (
+        <article key={c.key} className="rounded-2xl border bg-surface p-4" style={{ borderColor: 'var(--bad-line)' }}>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5"><Avatar id={c.memberId} /><span className="font-display text-base font-bold">{M[c.memberId].name}</span></div>
+            <ConflictTag><span className="num">Clash {rangeLabel(c.from, c.to)} · {spanDays(c.from, c.to)} {spanDays(c.from, c.to) === 1 ? 'day' : 'days'}</span></ConflictTag>
+          </div>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2">
+            {[c.a, c.b].map(e => (
+              <button key={e.id} onClick={() => { setView('calendar'); setMonth(c.from.slice(0, 8) + '01'); pickEntry(e, c.from); }}
+                className="rounded-xl border border-line p-3 text-left hover:bg-dim">
+                <span className="flex items-start justify-between gap-2"><span className="font-semibold">{e.title}</span><Badge status={e.status} /></span>
+                <span className="num mt-1 block text-xs text-muted">{rangeLabel(e.start, e.end)} · {e.type}</span>
+              </button>
+            ))}
+          </div>
+          <p className="mt-3 text-xs text-muted">Select a card to open it on the calendar, then change the dates or status.</p>
+        </article>
+      ))}
+    </section>
+  );
+
+  /* ---- side panel ---- */
+  const free = people.filter(p => !personBusy(p.id, selDate));
+  const panel = (
+    <aside ref={panelRef} className="grid scroll-mt-4 content-start gap-3 lg:sticky lg:top-6" aria-label="Day details">
+      <div className="rounded-2xl border border-line bg-surface p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-display text-lg font-bold">{dLong(selDate)}</h2>
+            <p className="mt-0.5 text-sm text-muted">{selDate === TODAY ? 'Today. ' : ''}Everything booked on this date, and who is free.</p>
+          </div>
+          <button onClick={() => openAdd(selDate)} className="shrink-0 rounded-xl border border-line p-2.5 hover:bg-dim" aria-label={`Add work on ${dShort(selDate)}`}><Icon n="plus" /></button>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line pt-3">
+          <span className="text-xs font-semibold uppercase tracking-wider text-muted">Free ({free.length})</span>
+          {free.length === 0 ? <span className="text-sm text-muted">Everyone is booked</span> : (
+            <span className="flex flex-wrap gap-1.5">{free.map(p => (
+              <span key={p.id} className="inline-flex items-center gap-1.5 rounded-full border border-line py-0.5 pl-0.5 pr-2.5 text-xs font-semibold"><Avatar id={p.id} size={20} />{first(p.id)}</span>
+            ))}</span>
+          )}
+        </div>
+      </div>
+
+      {selEntry && (
+        <EntryDetail key={selEntry.id} entry={selEntry} conflicts={confMap[selEntry.id] || []}
+          onStatus={s => setEntries(es => es.map(e => (e.id === selEntry.id ? { ...e, status: s } : e)))}
+          onEdit={() => setForm({ ...selEntry })}
+          onDelete={() => { setEntries(es => es.filter(e => e.id !== selEntry.id)); setSelId(null); setToast('Work removed'); }} />
+      )}
+
+      <div className="rounded-2xl border border-line bg-surface p-4">
+        <h3 className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted">On this date ({dayEntries.length})</h3>
+        {entries.length === 0 && dayEntries.length === 0 ? (
+          <div className="flex flex-col items-center px-2 py-5 text-center">
+            <Illustration />
+            <p className="mt-3 font-display text-base font-bold">Nothing scheduled yet</p>
+            <p className="mt-1 text-sm text-muted">Add the first piece of work and the calendar fills in.</p>
+            <div className="mt-4 flex flex-wrap justify-center gap-2">
+              <button onClick={() => openAdd(selDate)} className="rounded-xl bg-accent px-4 py-2 text-sm font-bold text-white">Add work</button>
+              <button onClick={() => setEntries(makeSeed())} className="rounded-xl border border-line px-4 py-2 text-sm font-semibold hover:bg-dim">Load sample data</button>
+            </div>
+          </div>
+        ) : dayEntries.length === 0 ? (
+          <div className="flex flex-col items-center px-2 py-5 text-center">
+            <Illustration />
+            <p className="mt-3 font-display text-base font-bold">A clear day</p>
+            <p className="mt-1 text-sm text-muted">{memberFilter === 'all' ? (filter === 'all' ? 'Nothing is booked' : 'Nothing matches this filter') : first(memberFilter) + ' has nothing booked'} on {dShort(selDate)}. A good moment to plan something.</p>
+            <button onClick={() => openAdd(selDate)} className="mt-4 rounded-xl bg-accent px-4 py-2 text-sm font-bold text-white">Add work for {dShort(selDate)}</button>
+          </div>
+        ) : (
+          <ul className="grid gap-1.5">
+            {dayEntries.map(e => {
+              const on = e.id === selId;
+              const hasC = (confMap[e.id] || []).length > 0;
+              return (
+                <li key={e.id}>
+                  <button onClick={() => pickEntry(e, selDate)} className="flex w-full items-center gap-3 rounded-xl p-2.5 text-left"
+                    style={{ background: on ? 'var(--accent-soft)' : 'transparent', border: on ? '1px solid var(--accent)' : '1px solid var(--line)' }}>
+                    <Avatar id={e.memberId} size={30} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold">{e.title}</span>
+                      <span className="mt-0.5 flex items-center gap-1.5 text-xs text-muted"><TypeTag type={e.type} compact /><span className="truncate">{e.type} · {M[e.memberId].name}</span></span>
+                    </span>
+                    <span className="flex flex-col items-end gap-1">
+                      <Badge status={e.status} />
+                      {hasC && <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-bad"><Icon n="alert" className="h-3 w-3" />Conflict</span>}
+                    </span>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+      <button onClick={() => { const el = document.getElementById('views'); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); }}
+        className="rounded-xl border border-line bg-surface px-4 py-3 text-sm font-semibold hover:bg-dim lg:hidden">Back to calendar</button>
+    </aside>
+  );
+
+  const cards = [
+    { k: 'week', label: 'Active this week', value: thisWeek, note: 'Work items running Monday to Sunday' },
+    { k: 'conf', label: 'Scheduling conflicts', value: allConflicts.length, note: allConflicts.length ? 'Select to review each clash' : 'Nobody is double-booked', bad: allConflicts.length > 0, go: () => setView('conflicts') },
+    { k: 'free', label: 'Free today', value: `${freeToday}/${MEMBERS.length}`, note: 'People with nothing booked today' },
+    { k: 'tent', label: 'Awaiting confirmation', value: tentative, note: 'Tentative work to firm up' }
+  ];
+  const tabs = [
+    { id: 'calendar', label: 'Calendar', icon: 'cal', note: 'See who is working on what each day, by status colour and work type. Select a date or item for details.' },
+    { id: 'availability', label: 'Availability', icon: 'users', note: 'Each row is a person and each column a day. Cells show status colour and work type code.' },
+    { id: 'conflicts', label: 'Conflicts', icon: 'alert', note: 'Every case where one person has two commitments on the same day.' }
+  ];
+  const tab = tabs.find(t => t.id === view);
+
+  return (
+    <div className="mx-auto max-w-[1240px] pb-16 sm:pb-0">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-accent-ink">Meridian Studio · sample team</p>
+          <h1 className="mt-1 font-display text-3xl font-bold leading-tight sm:text-4xl">Team availability</h1>
+          <p className="mt-1.5 max-w-xl text-muted">Plan work, see who is free, and catch double-bookings before they happen.</p>
+        </div>
+        <div className="flex gap-2">
+        <button onClick={() => setCalModal(true)} className="inline-flex items-center gap-2 rounded-2xl border border-line bg-surface px-4 py-3 text-sm font-semibold hover:bg-dim"><Icon n="cal" />Calendars</button>
+        <button onClick={() => openAdd(selDate)} className="hidden items-center gap-2 rounded-2xl bg-accent px-5 py-3 text-sm font-bold text-white shadow-sm hover:brightness-95 sm:inline-flex">
+          <Icon n="plus" />Add work <kbd className="ml-1 hidden rounded border border-white/40 px-1.5 text-[11px] font-semibold sm:inline">N</kbd>
+        </button>
+        </div>
+      </header>
+
+      <section className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4" aria-label="Summary">
+        {cards.map(c => {
+          const inner = (
+            <>
+              <span className="text-xs font-semibold uppercase tracking-wider" style={{ color: c.bad ? 'var(--bad)' : 'var(--muted)' }}>{c.label}</span>
+              <span className="num mt-2 block font-display text-3xl font-bold" style={{ color: c.bad ? 'var(--bad)' : 'var(--ink)' }}>{c.value}</span>
+              <span className="mt-1 block text-xs text-muted">{c.note}</span>
+            </>
+          );
+          const st = { background: c.bad ? 'var(--bad-soft)' : 'var(--surface)', border: `1px solid ${c.bad ? 'var(--bad-line)' : 'var(--line)'}` };
+          return c.go ? (
+            <button key={c.k} onClick={c.go} className="rounded-2xl p-4 text-left" style={st}>{inner}</button>
+          ) : (
+            <div key={c.k} className="rounded-2xl p-4" style={st}>{inner}</div>
+          );
+        })}
+      </section>
+
+      <div className="mt-7 flex flex-wrap items-center justify-between gap-3">
+        <div role="tablist" aria-label="Views" className="flex w-full rounded-2xl border border-line bg-surface p-1 sm:inline-flex sm:w-auto">
+          {tabs.map(t => {
+            const on = view === t.id;
+            return (
+              <button key={t.id} role="tab" aria-selected={on} onClick={() => setView(t.id)}
+                className="inline-flex flex-1 items-center justify-center gap-2 rounded-xl px-2 py-2.5 text-sm font-semibold sm:flex-none sm:px-3.5"
+                style={{ background: on ? 'var(--ink)' : 'transparent', color: on ? '#fff' : 'var(--ink)' }}>
+                <Icon n={t.icon} className="hidden h-4 w-4 sm:block" />{t.label}
+                {t.id === 'conflicts' && conflicts.length > 0 && (
+                  <span className="num rounded-full px-1.5 text-xs font-bold" style={{ background: on ? '#fff' : 'var(--bad)', color: on ? 'var(--bad)' : '#fff' }}>{conflicts.length}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2">
+          <label htmlFor="filter" className="text-sm font-semibold text-muted">Show</label>
+          <select id="filter" value={filter} onChange={e => { setFilter(e.target.value); setSelId(null); }}
+            className="min-w-0 max-w-full rounded-xl border border-line bg-surface px-3 py-2.5 text-base font-semibold sm:text-sm">
+            <option value="all">Whole team</option>
+            <optgroup label="People">
+              {MEMBERS.map(m => <option key={m.id} value={'m:' + m.id}>{m.name}</option>)}
+            </optgroup>
+            <optgroup label="Status">
+              {STATUSES.map(s => <option key={s} value={'s:' + s}>{s} only</option>)}
+            </optgroup>
+            <optgroup label="Category">
+              <option value="c:work">Work only</option>
+              <option value="c:leave">Leave only</option>
+              <option value="c:presence">In office</option>
+              <option value="c:team">Team-wide (holidays, all hands, events)</option>
+            </optgroup>
+            <optgroup label="Needs attention">
+              <option value="x:conflicts">Conflicts only</option>
+            </optgroup>
+          </select>
+        </div>
+      </div>
+      <div className="mt-3"><ViewNote>{tab.note}</ViewNote></div>
+
+      <div className="scroll-row mt-3 flex items-center gap-2 overflow-x-auto pb-1 sm:flex-wrap sm:overflow-visible" role="group" aria-label="Filter by work type">
+        <span className="mr-1 shrink-0 text-xs font-semibold uppercase tracking-wider text-muted">Work type</span>
+        {TYPES.map(t => {
+          const off = hiddenTypes.includes(t);
+          return (
+            <button key={t} onClick={() => toggleType(t)} aria-pressed={!off}
+              className="num inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-semibold"
+              style={{ background: off ? 'transparent' : 'var(--surface)', color: off ? 'var(--muted)' : 'var(--ink)', border: off ? '1px dashed var(--s-tent-line)' : '1px solid var(--ink)', textDecoration: off ? 'line-through' : 'none' }}>
+              <span className="text-[9px] font-bold tracking-wider opacity-60">{TYPE_CODE[t]}</span>{t}
+              <span className="rounded-full bg-dim px-1.5 text-[11px] text-muted" style={{ textDecoration: 'none' }}>{typeCounts[t]}</span>
+            </button>
+          );
+        })}
+        <button onClick={() => setTypeModal(true)} className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full px-2.5 py-1.5 text-xs font-semibold text-accent-ink" style={{ border: '1px dashed var(--accent)' }}>
+          <Icon n="plus" className="h-3 w-3" />New type
+        </button>
+        {hiddenTypes.length > 0 && (
+          <button onClick={() => setHiddenTypes([])} className="shrink-0 whitespace-nowrap text-xs font-semibold text-accent-ink underline underline-offset-2">Show all types</button>
+        )}
+      </div>
+
+      <main id="views" className="mt-4 grid scroll-mt-4 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_350px]">
+        <div className="min-w-0">{view === 'calendar' ? calendar : view === 'availability' ? availability : conflictView}</div>
+        {panel}
+      </main>
+
+      <footer className="mt-8 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4 text-xs text-muted">
+        <span>All names and work items are fictional. Changes stay in this browser.</span>
+        <span className="flex gap-3">
+          <button onClick={() => { setEntries(makeSeed()); setSelId(null); setToast('Sample data restored'); }} className="font-semibold underline underline-offset-2">Restore sample data</button>
+          <button onClick={() => { setEntries([]); setSelId(null); setToast('Calendar cleared'); }} className="font-semibold underline underline-offset-2">Clear all</button>
+        </span>
+      </footer>
+
+      {form && <EntryForm initial={form} entries={entries} onSave={saveEntry} onClose={() => setForm(null)} onTypesChanged={bumpTypes} />}
+      {typeModal && <TypeModal entries={entries} onClose={() => setTypeModal(false)} onChanged={bumpTypes} onToast={setToast} />}
+      {calModal && <CalendarsModal entries={entries} onImport={importEvents} onClose={() => setCalModal(false)} />}
+      {!form && !typeModal && !calModal && (
+        <button onClick={() => openAdd(selDate)} aria-label="Add work"
+          className="fixed z-40 flex h-14 w-14 items-center justify-center rounded-full bg-accent text-white shadow-lg sm:hidden"
+          style={{ bottom: 'max(20px, env(safe-area-inset-bottom, 0px))', right: 'max(16px, env(safe-area-inset-right, 0px))' }}>
+          <Icon n="plus" className="h-6 w-6" />
+        </button>
+      )}
+      {toast && (
+        <div role="status" className="toast fade-in fixed left-1/2 z-[60] -translate-x-1/2 rounded-full bg-ink px-4 py-2.5 text-sm font-semibold text-white shadow-lg"
+          >{toast}</div>
+      )}
+    </div>
+  );
+}
+
+function Legend() {
+  return (
+    <ul className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted">
+      {STATUSES.map(s => <li key={s}><Badge status={s} /></li>)}
+      <li><Badge status="Official" /></li>
+      <li className="inline-flex items-center gap-1.5"><span className="hatch inline-block h-3.5 w-3.5 rounded" style={{ border: '1.5px solid var(--bad)' }} />Conflict</li>
+      <li className="inline-flex items-center gap-1.5"><span className="inline-block h-3.5 w-3.5 rounded" style={{ background: '#F9F9F7', border: '1px solid var(--line)' }} />Free</li>
+      <li className="basis-full text-xs text-muted">Colour shows status and the short code shows work type: {TYPES.map(t => `${TYPE_CODE[t]} ${t}`).join(', ')}. Day off marks Singapore public holidays (MOM calendar), when the whole team is unavailable. All hands, special events and In office are shown but do not block anyone.</li>
+    </ul>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
